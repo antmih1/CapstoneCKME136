@@ -2,7 +2,7 @@
 
 install.packages("data.table")
 library(data.table)
-raw.churn <- fread("C:\\D-Drive\\CKME136\\R_code\\churn_all.txt", header = F,
+raw.churn <- fread("churn_all.txt", header = F,
                    colClasses = c("character","numeric","integer","character",
                                   "character","character","integer","numeric",
                                   "numeric","numeric","numeric","numeric","numeric",
@@ -59,6 +59,7 @@ table(is.na(churn_data))
 
 # Remove the columns that will not be used
 churn_data$state <-NULL
+churn_data$phone_number <- NULL
 str(churn_data)
 
 # 3.Split the data into 80% train and 20% test datasets
@@ -75,4 +76,84 @@ churn_test <- subset(churn_data, split_t == F)
 str(churn_train)
 str(churn_test)
 
+# Apply algorithm
+model1 <- glm(churn ~ ., family = binomial(logit), data = churn_train)
 
+summary(model1)
+# We can notice that international_plan, number of customer service calls and international minutes
+# are the most significant variables in customer churn
+
+#test the model on the test dataset 
+churn_test$predicted.churn <- predict(model1, newdata = churn_test, type = "response")
+# confusion matrix
+table(churn_test$churn, churn_test$predicted.churn > 0.5)
+
+# calculate accuracy
+(29+842)/(29+842+112+17)
+  # the accuracy is 87%
+#calculate recall
+29/(29+112)
+  # the recall is 20%
+# calculate precision
+29/(29+17)
+  # the precission is 63%
+# I will try to improve this number by using step method and cross-fold
+
+# Apply decision tree algorithm
+# Install the library rpart
+install.packages("rpart")
+library(rpart)
+# train the model with decision tree model
+ model2 <- rpart(churn ~ ., method = "class", data = churn_train)
+
+# predict on the test dataset
+churn.predict <- predict(model2, churn_test)
+head(churn.predict) # these are the probaliities that a customer will churn
+
+# join these 2 columns
+churn.predict <- as.data.frame(churn.predict)
+
+join <- function(x){
+  if (x>0.5){return ("Churner")
+    }else{return("NotChurner")}
+}
+churn.predict$churn <- sapply(churn.predict$Churner, join)
+head(churn.predict)
+
+# Confusion matrix
+table(churn.predict$churn, churn_test$churn)
+
+# accuracy
+(97+842)/(97+44+17+842)
+  # the accuracy is 93%
+# recall
+97/(97+17)
+  # the recall is 85%
+# precision
+97/(97+44)
+  # the precision is 97%
+
+# Use the libtrary rpart.plot to plot the decision tree
+library(rpart.plot)
+prp(model2)
+
+# Apply random forest algorithm
+library(randomForest)
+
+model3 <- randomForest(churn ~ ., data = churn_train, importance = TRUE)
+
+predRF <- predict(model3, churn_test)
+
+# Confusion matrix for the random forest
+ 
+table(predRF, churn_test$churn)
+
+# calculate accuracy
+(102+849)/(102+39+10+849)
+  # the accuracy is 95%, it is better the decision tree model
+# calculate recall
+102/(102+10)
+  # the recall is 91%
+# calculate precision
+102/(102+39)
+  #the precision is 72%
