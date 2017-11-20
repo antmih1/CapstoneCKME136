@@ -1,0 +1,1018 @@
+---
+title: 'CKME 136 - Churn Analysis in Telecommunications'
+author: "Antoaneta Mihaila"
+output: word_document
+date: "November 20th, 2017"
+---
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+Use RStudio for this assignment. 
+Edit the file `Churn` and insert your R code where wherever you see the string "INSERT YOUR ANSWER HERE"
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. 
+
+#1. Read the data
+
+
+```{r}
+library(caTools)
+library(caret)
+library(rpart.plot)
+library(gbm)
+library(kernlab)
+#install.packages("h2o")
+library(h2o)
+#install.packages("nnet")
+library(nnet)
+library(randomForest)
+library(xgboost)
+library(rpart)
+library(ROCR)
+library(pROC)
+library(ggplot2)
+library(corrplot)
+library(rpart.plot)
+
+churn_data <- read.csv("churn.csv", sep = ",",header = F, stringsAsFactors = F)
+
+names(churn_data) <- c("state", "account_length","area_code","phone_number","international_plan","voice_mail_plan",
+"number_vmail_messages","total_day_minutes","total_day_calls","total_day_charge",
+"total_eve_minutes","total_eve_calls","total_eve_charge",
+"total_night_minutes","total_night_calls","total_night_charge",
+"total_intl_minutes","total_intl_calls","total_intl_charge","number_customer_service_calls","churn")
+head(churn_data)
+
+```
+
+#2. Descriprive Statistics
+
+
+```{r}
+summary(churn_data)
+str(churn_data)
+nrow(churn_data)
+
+
+```
+
+#3. Plot the data
+
+```{r}
+#Check the distribution of the data
+###################
+h1 <- hist(churn_data$total_day_minutes, breaks = 15, col ="red", main = "Total day minutes", freq = FALSE)
+h2 <- hist(churn_data$total_day_calls, breaks = 15, col ="red", main = "Total day calls", freq = FALSE)
+h3 <- hist(churn_data$total_day_charge, breaks = 15, col ="red", main = "Total day charge", freq = FALSE)
+
+h4 <- hist(churn_data$total_eve_minutes, breaks = 15, col ="blue", main = "Total evening minutes", freq = FALSE)
+h5 <- hist(churn_data$total_eve_calls, breaks = 15, col ="blue", main = "Total evening calls", freq = FALSE)
+h6 <- hist(churn_data$total_eve_charge, breaks = 15, col ="blue", main = "Total evening charge", freq = FALSE)
+
+h7 <- hist(churn_data$total_night_minutes, breaks = 15, col ="green", main = "Total night minutes", freq = FALSE)
+h8 <- hist(churn_data$total_night_calls, breaks = 15, col ="green", main = "Total night calls", freq = FALSE)
+h9 <- hist(churn_data$total_night_charge, breaks = 15, col ="green", main = "Total night charge", freq = FALSE)
+
+h10 <- hist(churn_data$total_intl_minutes, breaks = 15, col ="yellow", main = "Total international minutes", freq = FALSE)
+h11 <- hist(churn_data$total_intl_calls, breaks = 15, col ="yellow", main = "Total international calls", freq = FALSE)
+h12 <- hist(churn_data$total_intl_charge, breaks = 15, col ="yellow", main = "Total international charge", freq = FALSE)
+
+# we can notice that only total international minutes distribution is right squewed
+
+# Check if the account length has an impact on churn
+ggplot(churn_data, aes(account_length, fill = churn)) + geom_density() + facet_grid(churn~.)+labs(title="Account Length")
+# It doesn't look that the account lenght has an impact on churn
+
+
+#Total day minutes summary
+summary(churn_data$total_day_minutes)
+#Total evening minutes summary
+summary(churn_data$total_eve_minutes)
+#Total night minutes summary
+summary(churn_data$total_night_minutes)
+#Total international minutes summary
+summary(churn_data$total_intl_minutes)
+# If we look at the quantiles of the day, evening, night calls duration we can see that the day time has the shortest call duration
+# 
+# Take a look at the charges
+summary(churn_data$total_day_charge)
+summary(churn_data$total_eve_charge)
+summary(churn_data$total_night_charge)
+summary(churn_data$total_intl_charge)
+# We notice that the day charge is higher than evening and night charge and the duration of the day calls are shorter than duration of evening and night calls
+
+
+
+```
+
+#4. Clean the data
+
+```{r}
+# check the missing data
+# From the summary we can see that are not missing data
+# We can also check with 
+table(is.na(churn_data))
+# Remove the columns that will not be used
+churn_data$state <-NULL
+churn_data$phone_number <- NULL
+
+#str(churn_data)
+# Change the international_plan, voice_mail_plan, churn to factors
+churn_data$churn <- as.factor(ifelse(grepl("False", churn_data$churn), "NotChurner", "Churner"))
+churn_data$international_plan <- as.factor(ifelse(grepl("yes",churn_data$international_plan ), "IntlPlan", "NoIntlPlan"))
+churn_data$voice_mail_plan <- as.factor(ifelse(grepl("yes", churn_data$voice_mail_plan), "VmPlan", "NoVmPlan"))
+churn_data$area_code <- as.factor(churn_data$area_code)
+table(churn_data$churn)
+#table(churn_data$international_plan)
+#table(churn_data$voice_mail_plan)
+###########
+#Check for outliers.Plot the boxplots for the numeric variables
+boxplot(churn_data[5:9])
+boxplot(churn_data[10:13])
+boxplot(churn_data[14:18])
+
+#Check the correlation between independent variables
+cor.day <- cor(churn_data[,6:8], use = "complete.obs", method = "pearson")
+cor.day
+corrplot(cor.day, method = "color")
+#We notice a strong correlation between total day minutes and total day charge
+cor.eve <- cor(churn_data[,9:11], use = "complete.obs", method = "pearson")
+cor.eve
+corrplot(cor.eve, method = "color")
+#We notice a strong correlation between total evening minutes and total evening charge
+cor.night <- cor(churn_data[,12:14], use = "complete.obs", method = "pearson")
+cor.night
+corrplot(cor.night, method = "color")
+#We notice a strong correlation between total night minutes and total night charge
+cor.intl <- cor(churn_data[,15:17], use = "complete.obs", method = "pearson")
+cor.intl
+corrplot(cor.intl, method = "color")
+#We notice a strong correlation between total international minutes and total international charge, will will drop the charge
+
+
+#Check the influence on call duration on churn
+par(mfrow=c(3,2))
+hist(churn_data$total_eve_minutes[churn_data$churn=="Churner"], xlab ="Churn", main = "Total evening minutes", col="Blue", freq=FALSE, breaks=15)
+hist(churn_data$total_eve_minutes[churn_data$churn=="NotChurner"], xlab = "NotChurn", main = "Total evening minutes", col = "Blue", freq = FALSE, breaks = 15)
+hist(churn_data$total_night_minutes[churn_data$churn=="Churner"], xlab ="Churn", main = "Total night minutes", col="Blue", freq= FALSE, breaks=15)
+hist(churn_data$total_night_minutes[churn_data$churn=="NotChurner"], xlab = "NotChurn", main = "Total night minutes", col = "Blue", freq = FALSE,breaks = 15)
+hist(churn_data$total_day_minutes[churn_data$churn=="Churner"], xlab ="Churn", main = "Total day minutes", col="Blue", freq=FALSE, breaks =15)
+hist(churn_data$total_day_minutes[churn_data$churn=="NotChurner"], xlab = "NotChurn", main = "Total day minutes", col = "Blue", freq=FALSE, breaks=15)
+
+#Check the distribution of international minutes with churn
+p <- qplot(interaction(churn,international_plan), total_intl_minutes, data=churn_data, geom="boxplot",
+main = "Distribution of international minutes with international plan and churn", xlab = "Churn and international plan")
+p
+
+#We can see that the customers with longer international call duration are more likely to churn
+#
+#Check if the customer has voice mail plan has an impact on churn
+
+vmplan <- ggplot(churn_data,aes(x=factor(voice_mail_plan))) 
+vmplan <- vmplan + geom_bar(aes(fill=churn),position = "dodge")
+vmplan + theme_bw() + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+ 
+#We can see that the customers with voice mail plan are less likely to churn than the customers without a voice mail plan
+#16%of customers without voice mail plan will churn
+#7% of customers with voice plan will churn
+
+# Check the influence of area code on churn
+
+area <- ggplot(churn_data,aes(x=factor(area_code))) 
+area <- area + geom_bar(aes(fill=churn),position = "dodge")
+area + theme_bw() + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+table(churn_data$churn, churn_data$area_code)
+#The area 416 has the high number of customers but the less percentage in churn (13% compare with 14% in the other 2 areas) 
+#Check the number customer service calls and churn
+table(churn_data$number_customer_service_calls, churn_data$churn)
+
+csc <- ggplot(churn_data,aes(x=factor(number_customer_service_calls))) 
+csc <- csc + geom_bar(aes(fill=churn),position = "dodge")
+csc + theme_bw() + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+# Check the number of zeros in the number customer service calls and voice mail messages
+a <- length(which(churn_data$number_customer_service_calls==0))
+b <- length(which(churn_data$number_vmail_messages==0))
+a
+b
+
+#Conclusions from the descriptive statistics:
+#We have 707 churners out of 5000 customers, for a pure guess 14% of the customers will churn
+#1.There is a higher charge for calls during day time then for all other calls.
+#2.The duration of calls during day is smaller than the duration of other calls
+#There is a high number of zeros in the number of voice mail messages(3678)
+#There is a high percentage of churners among the customers with the international plan
+#Area code and account lenght don't have a high influence on churn
+#there is a high correlation between call duration and charge
+#str(churn_data)
+```
+
+#5.Split the data
+
+
+```{r}
+#Split the data set in training and validation (80% / 20%)
+# 5.1 shuffle the full set
+set.seed(3152)
+churn_data <- churn_data[sample.int(nrow(churn_data)),]
+#     5.2 Split the data set in train and test
+set.seed(441)
+split_t <- sample.split(churn_data$churn, SplitRatio = 0.8)
+churn_train <- subset(churn_data, split_t == T)
+churn_test <- subset(churn_data, split_t == F)
+#str(churn_train)
+#str(churn_test)
+
+# Compute observation weights (inverse priors) for the training set observations. We will use this weight for decision tree models to balance "Churner" and "NotChurner" and to make sure the "Churner" is present in all trees
+ch_weight <- sum(churn_train$churn == 'NotChurner') / sum(churn_train$churn == 'Churner')
+ch_weight
+train_weights <- ifelse(churn_train$churn == 'Churner', ch_weight, 1)
+
+```
+
+#6.Logistic Regression Model
+
+```{r}
+
+# 6.1 First set the train control for 'caret'. We do a 4-fold cross-validation and ask 
+#     for class probabilities
+fitControl <- trainControl(method = "cv", number = 4, classProbs = TRUE, summaryFunction = twoClassSummary)
+
+#6.2 Train the logistic regression model, compute the confusion matrix
+
+#Train the model
+mod.glm <- train(churn ~ ., data = churn_train, method = "glm", weights = train_weights,trControl = fitControl, metric = "ROC")
+
+summary(mod.glm)
+
+
+glm_train_cm <- confusionMatrix(predict(mod.glm, newdata = churn_train), churn_train$churn)
+glm_test_cm <- confusionMatrix(predict(mod.glm, newdata = churn_test), churn_test$churn)
+glm_train_cm
+glm_test_cm
+# this model has an overall accuracy of
+#     - train set: 87.12%
+#     -test set: 86.7%
+
+# 6.2.1 - Compute the 'AUC' for the logistic regression model and plot the ROC and lift curves
+
+# 6.2.1.1 - ROC
+glmPred_train <- prediction(predict(mod.glm, newdata = churn_train, type = 'prob')[,2], churn_train$churn)
+glmPerf_train <- performance(glmPred_train, 'tpr', 'fpr')
+glmAUC_train <- as.numeric(performance(glmPred_train, 'auc')@y.values)
+
+glmPred_test <- prediction(predict(mod.glm, newdata = churn_test, type = 'prob')[,2], churn_test$churn)
+glmPerf_test <- performance(glmPred_test, 'tpr', 'fpr')
+glmAUC_test <- as.numeric(performance(glmPred_test, 'auc')@y.values)
+
+plot(glmPerf_train, col = 'red', lwd = 2, main = 'Logistic Regression model-Train and Test ROC', 
+     xlab = "False positive Rate", ylab = "True positive Rate")
+plot(glmPerf_test, col = 'green', lwd = 2, add = T)
+legend_names <- c('Training', 'Testing')
+legend_auc <- c(glmAUC_train, glmAUC_test)
+grid()
+legend('bottomright', paste0(legend_names, ' : auc = ', sprintf('%01.03f', legend_auc)), lwd = 2, col = c('red', 'green'))
+
+#6.2.1.2
+#Cumulative Lift
+#
+#Create a detaframe for semi-decile
+glm_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+nr <- nrow(glm_lift)
+qs <- predict(mod.glm, newdata = churn_train, type = "prob")
+#write.csv(file="qstrain", x=qs)
+# add the churn column
+qs$churn <- churn_train$churn
+#order the prediction dataframe by the Churner column in descending order
+qs <-qs[order(-qs$Churner),]
+
+#calculate the pure guess for the training set
+pri <- sum(churn_train$churn == "Churner") / nrow(churn_train)
+# calculate the lift
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(glm_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+glm_lift$Train <- current_lift # the lift for the training set
+
+# Repeat the steps for the test set
+qs <- predict(mod.glm, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+
+pri <- sum(churn_test$churn == "Churner") / nrow(churn_test)
+
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(glm_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+glm_lift$Test <- current_lift 
+
+#Plot the cumulative lift for train and test sets
+plot(glm_lift$percentile,glm_lift$Train, col = "red", type = "l", lwd = 2, main = "Logistic Regression -  Cummulative lift", xlab = "Percentile", ylab = "Cummulative lift")
+# add the cummulative lift for the test set
+lines(glm_lift$percentile, glm_lift$Test, col = "green", lwd = 2)
+grid() # add the grid
+legend("topright", paste0(legend_names, " : top semi-decile =   ", sprintf("%0.03f", glm_lift[1,2:3])), lwd = 2, col = c("red", "green"))
+
+#Conclusion: The Logistic Regression model performs more than 4 times better than the pure guess for the top 5% of the predictions
+```
+
+#7. Decision Tree Model
+
+
+```{r}
+
+#7.1 Train the decision tree model on the training set
+mod.cart <- train(churn ~ ., data = churn_train, method = "rpart", weights = train_weights, trControl = fitControl, metric = "ROC")
+
+#print simple model
+tree <- rpart(churn ~.,method='class',data = churn_train)
+prp(tree)
+#Plot the tree
+
+rpart.plot(mod.cart$finalModel)
+
+# 7.2 Predict and calculate the confusion matrix on train and test sets
+cart_train_cm <- confusionMatrix(predict(mod.cart, newdata = churn_train), churn_train$churn)
+cart_train_cm
+cart_test_cm <- confusionMatrix(predict(mod.cart, newdata = churn_test), churn_test$churn)
+cart_test_cm
+# This model has na overal accuracy of:
+#   - training set: 83.32%
+#   - testing set: 83.7%
+
+#7.3 Compute the "AUC" for the decision tree model and plot the ROC and lift curves
+#
+#7.3.1  - ROC
+
+cartPred_train <- prediction(predict(mod.cart, newdata = churn_train, type = "prob")[,2], churn_train$churn)
+cartPerf_train <- performance(cartPred_train, "tpr", "fpr")
+cartAUC_train <- as.numeric(performance(cartPred_train, "auc")@y.values)
+
+cartPred_test <- prediction(predict(mod.cart, newdata = churn_test, type = "prob")[,2], churn_test$churn)
+cartPerf_test <- performance(cartPred_test, "tpr", "fpr")
+cartAUC_test <- as.numeric(performance(cartPred_test, "auc")@y.values)
+
+#plot the ROC
+legend_names <- c("Training", "Testing")
+legend_auc <- c(cartAUC_train, cartAUC_test)
+plot(cartPerf_train, col = "red", lwd =2, main = "Decision Tree - Train and Test ROC", xlab = "False Positive Rate", ylab = "True Positive Rate")
+plot(cartPerf_test, col = "green", lwd = 3, add = T)
+grid()
+legend("bottomright", paste0(legend_names, " auc: = ", sprintf("%01.03f", legend_auc)),lwd = 2, col = c("red", "green"))
+
+#7.3.2 Cumulative lift
+cart_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+#cart_lift
+nr <- nrow(cart_lift)
+#nr
+qs <- predict(mod.cart, newdata = churn_train, type = "prob")
+#qs
+qs$churn <- churn_train$churn
+qs <- qs[order(-qs$Churner),]
+#qs
+pri <- sum(churn_train$churn == "Churner")/ nrow(churn_train)
+#pri
+current_lift <- as.numeric(rep(1.0, times = nr))
+for (i in 1:(nr-1)){
+  rows <- as.integer(cart_lift$percentile[i] * nrow(qs) / 100)
+  post <- sum(qs$churn[1:rows] == "Churner") / rows
+  current_lift[i] <- post / pri
+}
+cart_lift$Train <- current_lift
+
+qs <- predict(mod.cart, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+pri <- sum(churn_test$churn == "Churner")/ nrow(churn_test)
+current_lift <- as.numeric(rep(1.0, times = nr))
+for (i in 1:(nr-1)){
+  rows <- as.integer(cart_lift$percentile[i] * nrow(qs) / 100)
+  post <- sum(qs$churn[1:rows] == "Churner") / rows
+  current_lift[i] <- post/pri
+}
+cart_lift$Test <- current_lift
+
+# Plot the cumulative lift for the decision tree
+plot(cart_lift$percentile, cart_lift$Train, col = "red", type = "l", lwd = 2, main = "Decision Tree - Train and Test cumulative lift", xlab = "Percentile", ylab = "Cumulative lift")
+lines(cart_lift$percentile, cart_lift$Test, col = "green", lwd = 2)
+grid()
+legend("topright", paste0(legend_names, " : top semi-decile = ", sprintf("%01.03f", cart_lift[1, 2:3])), lwd = 2, col = c("red", "green"))
+
+# Conclusion: The decision tree model performs more than 3 times better than the pure guess for the top 5% of the predictions and it has better accuracy than the logistic regression model
+
+```
+
+#8. Stochastic Gradient Boosting Model
+
+
+```{r}
+
+#8.1 Train the stochastic gradient boosting model on the training set
+
+gbm.grid <- expand.grid(interaction.depth = c(5,9,12),
+                        n.trees = c(100,300,500),
+                        shrinkage = 0.1,
+                        n.minobsinnode=10)
+mod.gbm <- train(churn ~ ., data = churn_train, method = "gbm", trControl = fitControl,weights = train_weights, metric = "ROC", tuneGrid = gbm.grid)
+print(mod.gbm)
+
+summary(mod.gbm)
+varImp(mod.gbm,numTrees = 100)
+
+# 8.2 Predict and calculate the confusion matrix on train and test sets
+gbm_train_cm <- confusionMatrix(predict(mod.gbm, newdata = churn_train), churn_train$churn)
+gbm_train_cm
+gbm_test_cm <- confusionMatrix(predict(mod.gbm, newdata = churn_test), churn_test$churn)
+gbm_test_cm
+# This model has an overall accuracy of:
+#   - training set: 99.95%
+#   - testing set: 94.2%
+
+#8.3 Compute the "AUC" for the Stochastic Gradient Boosting model and plot the ROC and cumulative lift curves
+#
+#8.3.1  - ROC
+
+gbmPred_train <- prediction(predict(mod.gbm, newdata = churn_train, type = "prob")[,2], churn_train$churn)
+gbmPerf_train <- performance(gbmPred_train, "tpr", "fpr")
+gbmAUC_train <- as.numeric(performance(gbmPred_train, "auc")@y.values)
+
+gbmPred_test <- prediction(predict(mod.gbm, newdata = churn_test, type = "prob")[,2], churn_test$churn)
+gbmPerf_test <- performance(gbmPred_test, "tpr", "fpr")
+gbmAUC_test <- as.numeric(performance(gbmPred_test, "auc")@y.values)
+#plot the ROC
+legend_names <- c("Training", "Testing")
+legend_auc <- c(gbmAUC_train, gbmAUC_test)
+plot(gbmPerf_train, col = "red", lwd =2, main = "Stochastic Gradient - Train and Test ROC", xlab = "False Positive Rate", ylab = "True Positive Rate")
+plot(gbmPerf_test, col = "green", lwd = 3, add = T)
+grid()
+legend("bottomright", paste0(legend_names, " auc: = ", sprintf("%01.03f", legend_auc)),lwd = 2, col = c("red", "green"))
+
+#8.3.2 Cumulative lift
+gbm_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+nr <- nrow(gbm_lift)
+qs <- predict(mod.gbm, newdata = churn_train, type = "prob")
+#qs
+qs$churn <- churn_train$churn
+qs <- qs[order(-qs$Churner),]
+#qs
+pri <- sum(churn_train$churn == "Churner")/ nrow(churn_train)
+#pri
+current_lift <- as.numeric(rep(1.0, times = nr))
+for (i in 1:(nr-1)){
+  rows <- as.integer(gbm_lift$percentile[i] * nrow(qs) / 100)
+  post <- sum(qs$churn[1:rows] == "Churner") / rows
+  current_lift[i] <- post / pri
+}
+gbm_lift$Train <- current_lift
+
+qs <- predict(mod.gbm, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+pri <- sum(churn_test$churn == "Churner")/ nrow(churn_test)
+current_lift <- as.numeric(rep(1.0, times = nr))
+for (i in 1:(nr-1)){
+  rows <- as.integer(gbm_lift$percentile[i] * nrow(qs) / 100)
+  post <- sum(qs$churn[1:rows] == "Churner") / rows
+  current_lift[i] <- post / pri
+}
+gbm_lift$Test <- current_lift
+
+# Plot the cumulative lift for the stochastic gradient boosting
+plot(gbm_lift$percentile, gbm_lift$Train, col = "red", type = "l", lwd = 2, main = "Stochastic Gradient - Train and Test cumulative lift", xlab = "Percentile", ylab = "Cumulative lift")
+lines(cart_lift$percentile, gbm_lift$Test, col = "green", lwd = 2)
+grid()
+legend("topright", paste0(legend_names, " : top semi-decile = ", sprintf("%01.03f", gbm_lift[1, 2:3])), lwd = 2, col = c("red", "green"))
+
+# Conclusion: The Stochastic Gradient Boosting model performs more than 7 times better than the pure guess for the top 5% of the predictions and it has a better accuracy than both the logistic regression model and decision tree model
+
+```
+
+
+#9. Support Vector Machines (with a non-linear kernel)
+
+
+```{r}
+
+#9.1 Train the support vector machine model on the training set
+
+mod.svm <- train(churn ~ ., data = churn_train, method = "svmRadial", weights = train_weights,trControl = fitControl, metric = 'ROC')
+print(mod.svm)
+summary(mod.svm)
+
+# 9.2 Predict and calculate the confusion matrix on train and test sets
+svm_train_cm <- confusionMatrix(predict(mod.svm, newdata = churn_train), churn_train$churn)
+svm_test_cm <- confusionMatrix(predict(mod.svm, newdata = churn_test), churn_test$churn)
+svm_train_cm
+svm_test_cm
+# This model has an overall accuracy of:
+#   - training set: 100%
+#   - testing set: 85.6%
+
+#9.3 Compute the "AUC" for the svm model and plot the ROC and cumulative lift curves
+#
+#9.3.1  - ROC
+
+svmPred_train <- prediction(predict(mod.svm, newdata = churn_train, type = "prob")[,2], churn_train$churn)
+svmPerf_train <- performance(svmPred_train, "tpr", "fpr")
+svmAUC_train <- as.numeric(performance(svmPred_train, "auc")@y.values)
+
+svmPred_test <- prediction(predict(mod.svm, newdata = churn_test, type = "prob")[,2], churn_test$churn)
+svmPerf_test <- performance(svmPred_test, "tpr", "fpr")
+svmAUC_test <- as.numeric(performance(svmPred_test, "auc")@y.values)
+
+#plot the ROC
+legend_names <- c("Training", "Testing")
+legend_auc <- c(svmAUC_train, svmAUC_test)
+plot(svmPerf_train, col = "red", lwd =2, main = "SVM - Train and Test ROC", xlab = "False Positive Rate", ylab = "True Positive Rate")
+plot(svmPerf_test, col = "green", lwd = 2, add = T)
+grid()
+legend("bottomright", paste0(legend_names, " auc: = ", sprintf("%01.03f", legend_auc)),lwd = 2, col = c("red", "green"))
+
+#9.3.2 Cumulative lift
+svm_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+nr <- nrow(svm_lift)
+qs <- predict(mod.svm, newdata = churn_train, type = "prob")
+#qs
+qs$churn <- churn_train$churn
+qs <- qs[order(-qs$Churner),]
+#qs
+pri <- sum(churn_train$churn == "Churner")/ nrow(churn_train)
+#pri
+current_lift <- as.numeric(rep(1.0, times = nr))
+for (i in 1:(nr-1)){
+  rows <- as.integer(svm_lift$percentile[i] * nrow(qs) / 100)
+  post <- sum(qs$churn[1:rows] == "Churner") / rows
+  current_lift[i] <- post / pri
+}
+svm_lift$Train <- current_lift
+
+qs <- predict(mod.svm, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+pri <- sum(churn_test$churn == "Churner")/ nrow(churn_test)
+current_lift <- as.numeric(rep(1.0, times = nr))
+for (i in 1:(nr-1)){
+  rows <- as.integer(svm_lift$percentile[i] * nrow(qs) / 100)
+  post <- sum(qs$churn[1:rows] == "Churner") / rows
+  current_lift[i] <- post / pri
+}
+svm_lift$Test <- current_lift
+
+# Plot the cumulative lift for the support vector machine
+plot(svm_lift$percentile, svm_lift$Train, col = "red", type = "l", lwd = 2, main = "SVM - Train and Test cumulative lift", xlab = "Percentile", ylab = "Cumulative lift")
+lines(svm_lift$percentile, svm_lift$Test, col = "green", lwd = 2)
+grid()
+legend("topright", paste0(legend_names, " : top semi-decile = ", sprintf("%01.03f", svm_lift[1, 2:3])), lwd = 2, col = c("red", "green"))
+
+# Conclusion: We get overfit on the svm model, we try to eliminate some variable that can cause overfit: number of voice mail messages, area code and the charges
+names(churn_data)
+churn_data1 <- subset(churn_data[,-c(2,5,8,11,14,17)])
+names(churn_data1)
+#take out the calls
+churn_data2 <-subset(churn_data1[,-c(5,7,9,11)])
+names(churn_data2)
+set.seed(3155)
+churn_data2 <- churn_data2[sample.int(nrow(churn_data2)),]
+#     5.2 Split the data set in train and validation
+set.seed(443)
+sample2 <- sample.split(churn_data2$churn, SplitRatio = .8)
+churn_train <- subset(churn_data2, sample2 == T)
+churn_test <- subset(churn_data2, sample2 ==F)
+str(churn_test)
+str(churn_train)
+#train the svm model on new train set
+mod.svm1 <- train(churn ~ ., data = churn_train, method = "svmRadial", weights = train_weights,trControl = fitControl, metric = 'ROC')
+#Confusion matrix
+svm_train_cm1 <- confusionMatrix(predict(mod.svm1, newdata = churn_train), churn_train$churn)
+svm_test_cm1 <- confusionMatrix(predict(mod.svm1, newdata = churn_test), churn_test$churn)
+svm_train_cm1
+svm_test_cm1
+# This model on the new data has an overall accuracy of:
+#   - training set: 98.55%
+#   - testing set: 90.1%
+
+#Compute the "AUC" for the svm model and plot the ROC and cumulative lift curves
+#ROC
+
+svmPred_train1 <- prediction(predict(mod.svm1, newdata = churn_train, type = "prob")[,2], churn_train$churn)
+svmPerf_train1 <- performance(svmPred_train1, "tpr", "fpr")
+svmAUC_train1 <- as.numeric(performance(svmPred_train1, "auc")@y.values)
+
+svmPred_test1 <- prediction(predict(mod.svm1, newdata = churn_test, type = "prob")[,2], churn_test$churn)
+svmPerf_test1 <- performance(svmPred_test1, "tpr", "fpr")
+svmAUC_test1 <- as.numeric(performance(svmPred_test1, "auc")@y.values)
+
+#plot the ROC
+legend_names <- c("Training", "Testing")
+legend_auc <- c(svmAUC_train1, svmAUC_test1)
+plot(svmPerf_train1, col = "red", lwd =2, main = "SVM - Train and Test ROC", xlab = "False Positive Rate", ylab = "True Positive Rate")
+plot(svmPerf_test1, col = "green", lwd = 2, add = T)
+grid()
+legend("bottomright", paste0(legend_names, " auc: = ", sprintf("%01.03f", legend_auc)),lwd = 2, col = c("red", "green"))
+
+#9.3.2 Cumulative lift
+svm_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+nr <- nrow(svm_lift)
+qs <- predict(mod.svm1, newdata = churn_train, type = "prob")
+#qs
+qs$churn <- churn_train$churn
+qs <- qs[order(-qs$Churner),]
+#qs
+pri <- sum(churn_train$churn == "Churner")/ nrow(churn_train)
+#pri
+current_lift <- as.numeric(rep(1.0, times = nr))
+for (i in 1:(nr-1)){
+  rows <- as.integer(svm_lift$percentile[i] * nrow(qs) / 100)
+  post <- sum(qs$churn[1:rows] == "Churner") / rows
+  current_lift[i] <- post / pri
+}
+svm_lift$Train <- current_lift
+
+qs <- predict(mod.svm1, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+pri <- sum(churn_test$churn == "Churner")/ nrow(churn_test)
+current_lift <- as.numeric(rep(1.0, times = nr))
+for (i in 1:(nr-1)){
+  rows <- as.integer(svm_lift$percentile[i] * nrow(qs) / 100)
+  post <- sum(qs$churn[1:rows] == "Churner") / rows
+  current_lift[i] <- post / pri
+}
+svm_lift$Test <- current_lift
+
+# Plot the cumulative lift for the support vector machine
+plot(svm_lift$percentile, svm_lift$Train, col = "red", type = "l", lwd = 2, main = "SVM - Train and Test cumulative lift", xlab = "Percentile", ylab = "Cumulative lift")
+lines(svm_lift$percentile, svm_lift$Test, col = "green", lwd = 2)
+grid()
+legend("topright", paste0(legend_names, " : top semi-decile = ", sprintf("%01.03f", svm_lift[1, 2:3])), lwd = 2, col = c("red", "green"))
+
+# by eliminating calls variable we improve the accuracy on the test set, further investigation will be needed
+
+```
+
+#10. eXtreme Gradient Boosting model
+
+
+```{r}
+#10.1 Train the model on the training set
+xgb.grid <- expand.grid(nrounds = c(100,300), max_depth = c(5,9,12), eta = 0.12, gamma = 0, colsample_bytree = c(0.8,0.95), min_child_weight = 1, subsample = c(0.8,0.95))
+
+mod.xgb <- train(churn ~ ., data = churn_train, method = "xgbTree", weights = train_weights, lambda = 1.5, trControl = fitControl, metric = "ROC", tuneGrid = xgb.grid, preProc = c("center", "scale"))
+summary(mod.xgb)
+print(mod.xgb)
+# 10.2 Predict and calculate the confusion matrix on train and test sets
+xgb_train_cm <- confusionMatrix(predict(mod.xgb, newdata = churn_train), churn_train$churn)
+xgb_test_cm <- confusionMatrix(predict(mod.xgb, newdata = churn_test), churn_test$churn)
+xgb_train_cm
+xgb_test_cm
+# This model has an overall accuracy of:
+#   - training set: 97.12%
+#   - testing set: 94.8%
+
+# 10.3 - Compute the 'AUC' for the logistic regression model and plot the ROC and lift curves
+
+# 10.3.1 - ROC
+xgbPred_train <- prediction(predict(mod.xgb, newdata = churn_train, type = 'prob')[,2], churn_train$churn)
+xgbPerf_train <- performance(xgbPred_train, 'tpr', 'fpr')
+xgbAUC_train <- as.numeric(performance(xgbPred_train, 'auc')@y.values)
+
+xgbPred_test <- prediction(predict(mod.xgb, newdata = churn_test, type = 'prob')[,2], churn_test$churn)
+xgbPerf_test <- performance(xgbPred_test, 'tpr', 'fpr')
+xgbAUC_test <- as.numeric(performance(xgbPred_test, 'auc')@y.values)
+
+plot(xgbPerf_train, col = 'red', lwd = 2, main = 'eXtreme Gradient Boosting model-Train and Test ROC', 
+     xlab = "False positive Rate", ylab = "True positive Rate")
+plot(xgbPerf_test, col = 'green', lwd = 2, add = T)
+legend_names <- c('Training', 'Testing')
+legend_auc <- c(xgbAUC_train, xgbAUC_test)
+grid()
+legend('bottomright', paste0(legend_names, ' : auc = ', sprintf('%01.03f', legend_auc)), lwd = 2, col = c('red', 'green'))
+
+#10.3.2
+#Cumulative Lift
+#
+#Create a detaframe for semi-decile
+xgb_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+nr <- nrow(xgb_lift)
+qs <- predict(mod.xgb, newdata = churn_train, type = "prob")
+
+qs$churn <- churn_train$churn
+#order the prediction dataframe by the Churner column in descending order
+qs <-qs[order(-qs$Churner),]
+
+#calculate the pure guess for the training set
+pri <- sum(churn_train$churn == "Churner") / nrow(churn_train)
+# calculate the lift
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(xgb_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+}
+xgb_lift$Train <- current_lift # the lift for the training set
+
+# Repeat the steps for the test set
+qs <- predict(mod.xgb, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+
+pri <- sum(churn_test$churn == "Churner") / nrow(churn_test)
+
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(xgb_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+xgb_lift$Test <- current_lift 
+
+#Plot the cumulative lift for train and test sets
+plot(xgb_lift$percentile,xgb_lift$Train, col = "red", type = "l", lwd = 2, main = "eXtreme Gradient -  Cummulative lift", xlab = "Percentile", ylab = "Cummulative lift")
+# add the cummulative lift for the test set
+lines(xgb_lift$percentile, xgb_lift$Test, col = "green", lwd = 2)
+grid() # add the grid
+legend("topright", paste0(legend_names, " : top semi-decile =   ", sprintf("%0.03f", xgb_lift[1,2:3])), lwd = 2, col = c("red", "green"))
+
+#Conclusion: The eXtreme Gradient Boosting  model performs more than 7 times better than the pure guess for the top 5% of the predictions.
+
+```
+
+#11. Random Forest Model
+
+```{r}
+
+#11.1 Train the Random Forest model, compute the confusion matrix
+mod.rf <- train(churn ~ ., data = churn_train, method = 'rf', weights = train_weights, trControl = fitControl, metric = 'ROC', prox = T)
+print(mod.rf)
+summary(mod.rf)
+varImp(mod.rf)
+
+rf_train_cm <- confusionMatrix(predict(mod.rf, newdata = churn_train), churn_train$churn)
+rf_test_cm <- confusionMatrix(predict(mod.rf, newdata = churn_test), churn_test$churn)
+rf_train_cm
+rf_test_cm
+# this model has an overall accuracy of
+#     - train set: 99.5%
+#     -test set: 94.2%
+
+# 11.2 - Compute the 'AUC' for the Random Forest model and plot the ROC and lift curves
+
+# 11.2.1 - ROC
+rfPred_train <- prediction(predict(mod.rf, newdata = churn_train, type = 'prob')[,2], churn_train$churn)
+rfPerf_train <- performance(rfPred_train, 'tpr', 'fpr')
+rfAUC_train <- as.numeric(performance(rfPred_train, 'auc')@y.values)
+
+rfPred_test <- prediction(predict(mod.rf, newdata = churn_test, type = 'prob')[,2], churn_test$churn)
+rfPerf_test <- performance(rfPred_test, 'tpr', 'fpr')
+rfAUC_test <- as.numeric(performance(rfPred_test, 'auc')@y.values)
+
+plot(rfPerf_train, col = 'red', lwd = 2, main = 'Random Forest model-Train and Test ROC', 
+     xlab = "False positive Rate", ylab = "True positive Rate")
+plot(rfPerf_test, col = 'green', lwd = 2, add = T)
+legend_names <- c('Training', 'Testing')
+legend_auc <- c(rfAUC_train, rfAUC_test)
+grid()
+legend('bottomright', paste0(legend_names, ' : auc = ', sprintf('%01.03f', legend_auc)), lwd = 2, col = c('red', 'green'))
+
+#11.2.2
+#Cumulative Lift
+#
+#Create a detaframe for semi-decile
+rf_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+nr <- nrow(rf_lift)
+qs <- predict(mod.rf, newdata = churn_train, type = "prob")
+
+# add the churn column
+qs$churn <- churn_train$churn
+#order the prediction dataframe by the Churner column in descending order
+qs <-qs[order(-qs$Churner),]
+
+#calculate the pure guess for the training set
+pri <- sum(churn_train$churn == "Churner") / nrow(churn_train)
+# calculate the lift
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(rf_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+rf_lift$Train <- current_lift # the lift for the training set
+
+# Repeat the steps for the test set
+qs <- predict(mod.rf, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+
+pri <- sum(churn_test$churn == "Churner") / nrow(churn_test)
+
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(rf_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+rf_lift$Test <- current_lift 
+
+#Plot the cumulative lift for train and test sets
+plot(rf_lift$percentile,rf_lift$Train, col = "red", type = "l", lwd = 2, main = "Random Forest -  Cummulative lift", xlab = "Percentile", ylab = "Cummulative lift")
+# add the cummulative lift for the test set
+lines(rf_lift$percentile, rf_lift$Test, col = "green", lwd = 2)
+grid() # add the grid
+legend("topright", paste0(legend_names, " : top semi-decile =   ", sprintf("%0.03f", rf_lift[1,2:3])), lwd = 2, col = c("red", "green"))
+
+#Conclusion: The Random Forest model performs 7 times better than the pure guess for the top 5% of the predictions
+
+# Beacuse we noticed the overfit we will eliminate some variables
+names(churn_data)
+churn_data1 <- subset(churn_data[,-c(2,5,8,11,14,17)])
+names(churn_data1)
+#take out the calls
+churn_data2 <-subset(churn_data1[,-c(5,7,9,11)])
+names(churn_data2)
+set.seed(3155)
+churn_data2 <- churn_data2[sample.int(nrow(churn_data2)),]
+#     5.2 Split the data set in train and validation
+set.seed(443)
+sample2 <- sample.split(churn_data2$churn, SplitRatio = .8)
+churn_train <- subset(churn_data2, sample2 == T)
+churn_test <- subset(churn_data2, sample2 ==F)
+str(churn_test)
+str(churn_train)
+#And we train again the model on the new data
+mod.rf <- train(churn ~ ., data = churn_train, method = 'rf', weights = train_weights, trControl = fitControl, metric = 'ROC', prox = T)
+rf_train_cm <- confusionMatrix(predict(mod.rf, newdata = churn_train), churn_train$churn)
+rf_test_cm <- confusionMatrix(predict(mod.rf, newdata = churn_test), churn_test$churn)
+rf_train_cm
+rf_test_cm
+# this model has an overall accuracy of
+#     - train set: 99.3%
+#     -test set: 93.6%
+
+# Compute the 'AUC' for the Random Forest model and plot the ROC and lift curves
+
+# ROC
+rfPred_train <- prediction(predict(mod.rf, newdata = churn_train, type = 'prob')[,2], churn_train$churn)
+rfPerf_train <- performance(rfPred_train, 'tpr', 'fpr')
+rfAUC_train <- as.numeric(performance(rfPred_train, 'auc')@y.values)
+
+rfPred_test <- prediction(predict(mod.rf, newdata = churn_test, type = 'prob')[,2], churn_test$churn)
+rfPerf_test <- performance(rfPred_test, 'tpr', 'fpr')
+rfAUC_test <- as.numeric(performance(rfPred_test, 'auc')@y.values)
+
+plot(rfPerf_train, col = 'red', lwd = 2, main = 'Random Forest model-Train and Test ROC', 
+     xlab = "False positive Rate", ylab = "True positive Rate")
+plot(rfPerf_test, col = 'green', lwd = 2, add = T)
+legend_names <- c('Training', 'Testing')
+legend_auc <- c(rfAUC_train, rfAUC_test)
+grid()
+legend('bottomright', paste0(legend_names, ' : auc = ', sprintf('%01.03f', legend_auc)), lwd = 2, col = c('red', 'green'))
+#Cumulative lift
+rf_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+nr <- nrow(rf_lift)
+qs <- predict(mod.rf, newdata = churn_train, type = "prob")
+
+# add the churn column
+qs$churn <- churn_train$churn
+#order the prediction dataframe by the Churner column in descending order
+qs <-qs[order(-qs$Churner),]
+
+#calculate the pure guess for the training set
+pri <- sum(churn_train$churn == "Churner") / nrow(churn_train)
+# calculate the lift
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(rf_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+rf_lift$Train <- current_lift # the lift for the training set
+
+# Repeat the steps for the test set
+qs <- predict(mod.rf, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+
+pri <- sum(churn_test$churn == "Churner") / nrow(churn_test)
+
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(rf_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+rf_lift$Test <- current_lift 
+
+#Plot the cumulative lift for train and test sets
+plot(rf_lift$percentile,rf_lift$Train, col = "red", type = "l", lwd = 2, main = "Random Forest -  Cummulative lift", xlab = "Percentile", ylab = "Cummulative lift")
+# add the cummulative lift for the test set
+lines(rf_lift$percentile, rf_lift$Test, col = "green", lwd = 2)
+grid() # add the grid
+legend("topright", paste0(legend_names, " : top semi-decile =   ", sprintf("%0.03f", rf_lift[1,2:3])), lwd = 2, col = c("red", "green"))
+
+
+
+```
+
+#12. Neural Networks
+
+```{r}
+
+#12.1 Train the Neural Networks model, compute the confusion matrix
+
+nnet.grid <- expand.grid(size = c(10, 30), decay = c(0.1, 0.2))
+nnet.grid
+mod.ann <- train(churn ~ ., data = churn_train, method = 'nnet', weights = train_weights, trControl = fitControl, metric = 'ROC', trace = F, tuneGrid = nnet.grid, maxit = 2000)
+print(mod.ann)
+summary(mod.ann)
+#Confusion matrix
+ann_train_cm <- confusionMatrix(predict(mod.ann, newdata = churn_train), churn_train$churn)
+ann_test_cm <- confusionMatrix(predict(mod.ann, newdata = churn_test), churn_test$churn)
+ann_train_cm
+ann_test_cm
+# this model has an overall accuracy of
+#     - train set: 93.7%
+#     -test set: 93.5%
+
+# 12.2 - Compute the 'AUC' for the Neural Networks model and plot the ROC and lift curves
+
+# 12.2.1 - ROC
+annPred_train <- prediction(predict(mod.ann, newdata = churn_train, type = 'prob')[,2], churn_train$churn)
+annPerf_train <- performance(annPred_train, 'tpr', 'fpr')
+annAUC_train <- as.numeric(performance(annPred_train, 'auc')@y.values)
+
+annPred_test <- prediction(predict(mod.ann, newdata = churn_test, type = 'prob')[,2], churn_test$churn)
+annPerf_test <- performance(annPred_test, 'tpr', 'fpr')
+annAUC_test <- as.numeric(performance(annPred_test, 'auc')@y.values)
+
+plot(annPerf_train, col = 'red', lwd = 2, main = 'Neural Networks-Train and Test ROC', xlab = "False positive Rate", ylab = "True positive Rate")
+plot(annPerf_test, col = 'green', lwd = 2, add = T)
+legend_names <- c('Training', 'Testing')
+legend_auc <- c(annAUC_train, annAUC_test)
+grid()
+legend('bottomright', paste0(legend_names, ' : auc = ', sprintf('%01.03f', legend_auc)), lwd = 2, col = c('red', 'green'))
+
+#12.2.2
+#Cumulative Lift
+#
+#Create a detaframe for semi-decile
+ann_lift <- data.frame(percentile = as.integer(seq(5,100,5)))
+nr <- nrow(ann_lift)
+qs <- predict(mod.ann, newdata = churn_train, type = "prob")
+#write.csv(file="qstrain", x=qs)
+# add the churn column
+qs$churn <- churn_train$churn
+#order the prediction dataframe by the Churner column in descending order
+qs <-qs[order(-qs$Churner),]
+
+#calculate the pure guess for the training set
+pri <- sum(churn_train$churn == "Churner") / nrow(churn_train)
+# calculate the lift
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(ann_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+ann_lift$Train <- current_lift # the lift for the training set
+
+# Repeat the steps for the test set
+qs <- predict(mod.ann, newdata = churn_test, type = "prob")
+qs$churn <- churn_test$churn
+qs <- qs[order(-qs$Churner),]
+
+pri <- sum(churn_test$churn == "Churner") / nrow(churn_test)
+
+current_lift <- as.numeric(rep(1.0, times = nr)) # start from 1
+for (i in 1:(nr-1)){
+  rows <- as.integer(ann_lift$percentile[i] * nrow(qs) / 100) #the bins
+  post <- sum(qs$churn[1:rows] == "Churner") / rows # caclulate the probability of churner in each bin
+  current_lift[i] <- post/pri # the current lift
+
+}
+ann_lift$Test <- current_lift 
+
+#Plot the cumulative lift for train and test sets
+plot(ann_lift$percentile,rf_lift$Train, col = "red", type = "l", lwd = 2, main = "Neural Networks -  Cummulative lift", xlab = "Percentile", ylab = "Cummulative lift")
+# add the cummulative lift for the test set
+lines(ann_lift$percentile, ann_lift$Test, col = "green", lwd = 2)
+grid() # add the grid
+legend("topright", paste0(legend_names, " : top semi-decile =   ", sprintf("%0.03f", ann_lift[1,2:3])), lwd = 2, col = c("red", "green"))
+
+#Conclusion: The Neural Networks model performs  7 times better than the pure guess for the top 5% of the predictions.
+#Better performance can be obtained by adding more hidden layers to the network.
+```
